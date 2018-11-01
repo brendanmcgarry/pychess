@@ -1,7 +1,17 @@
 from __future__ import print_function
 from random import randint
-from sys import maxint
+try:
+    from sys import maxint
+except:
+    from sys import maxsize
+    maxint = maxsize
+
 minint = (-maxint) - 1
+
+try:
+    raw_input
+except:
+    raw_input = input
 
 WHITE = 0
 BLACK = 1
@@ -67,12 +77,13 @@ class Game:
         self.turn = WHITE
         self.ply = 1
         self.moves = []
+        self.winner = None
 #
-    def print_board(self, with_axes=True):
+    def print_board(self, with_axes=True, show_moved_from=True):
         for x in range(len(self.board)):
             print('-' * (len(self.board[x]) * 4 + 1))
             for y in range(len(self.board[x])):
-                print('| ' + (' ' if not isinstance(self.board[x][y], Piece) else self.board[x][y].get_char()) + ' ', end='')
+                print('| ' + ('•' if len(self.moves) > 1 and self.moves[-1][0] == (x, y) else ' ' if not isinstance(self.board[x][y], Piece) else self.board[x][y].get_char()) + ' ', end='')
             print('|' if not with_axes else '| ' + str(x))
         print('-' * (len(self.board[-1]) * 4 + 1))
         if with_axes:
@@ -89,10 +100,13 @@ class Game:
         return move_list
 #
     def move(self, move):
+        assert self.winner == None
         xfrom, yfrom = move[0]
         xto, yto = move[1]
         if isinstance(self.board[xto][yto], Piece):
             piece_to_remove = self.board[xto][yto]
+            if type(piece_to_remove) is King:
+                self.winner = self.other_color(piece_to_remove.get_color())
             piece_to_remove.died_at = self.ply
             self.dead_pieces.append(piece_to_remove)
             ind_of_piece_to_remove = self.pieces[piece_to_remove.get_color()].index(piece_to_remove)
@@ -108,6 +122,8 @@ class Game:
             if hasattr(promoted_piece, "has_moved"):
                 promoted_piece.has_moved = True
             promoted_piece.moved_before_promotion = pawn.has_moved
+        elif type(move[2]) is Rook:  # castling
+            pass
         self.board[xfrom][yfrom] = None
         self.ply += 1
         self.turn = self.other_color(self.turn)
@@ -121,16 +137,22 @@ class Game:
         self.ply -= 1
         self.board[xfrom][yfrom] = self.board[xto][yto]
         self.board[xto][yto] = None
-        if len(move) == 3 and type(move[2]) is type(self.board[xfrom][yfrom]):
+        if len(move) == 3 and move[2] is type(self.board[xfrom][yfrom]):
             piece_to_demote = self.board[xfrom][yfrom]
             color = piece_to_demote.get_color()
-            self.board[xfrom][yfrom] = Pawn(xfrom, yfrom, color)
-            self.pieces[color][self.pieces[color].index(piece_to_demote)] = self.board[xfrom][yfrom]
+            self.board[xfrom][yfrom] = Pawn(xto, yto, color)
             self.board[xfrom][yfrom].has_moved = piece_to_demote.moved_before_promotion
+            self.pieces[color].pop(self.pieces[color].index(piece_to_demote))
+            self.pieces[color].append(self.board[xfrom][yfrom])
+        elif len(move) == 3 and type(move[2]) is Rook:
+            pass
         self.board[xfrom][yfrom].unmove((xfrom, yfrom), self.ply)
         for piece in self.dead_pieces:
             if piece.died_at == self.ply:
                 assert (piece.x, piece.y) == (xto, yto)
+                if self.winner is not None:
+                    assert self.winner != piece.get_color()
+                    self.winner = None
                 self.pieces[piece.get_color()].append(piece)
                 self.board[piece.x][piece.y] = piece
                 self.dead_pieces.pop(self.dead_pieces.index(piece))
@@ -161,7 +183,7 @@ class Game:
         global n
         n = 0
         # value, best_move = self.get_best_move(depth, True)
-        value, best_move = self.get_best_move_alpha(depth, minint, maxint, True)
+        value, best_move = self.get_best_move_alpha(depth, minint, maxint, True, self.turn)
         print(n)
         print(value, best_move)
         inp = ''
@@ -172,9 +194,33 @@ class Game:
             print(value, best_move)
             self.print_board(1)
             inp = raw_input()
+            if inp == 'exit':
+                break
             n = 0
             # value, best_move = self.get_best_move(depth, True)
-            value, best_move = self.get_best_move_alpha(depth, minint, maxint, True)
+            value, best_move = self.get_best_move_alpha(depth, minint, maxint, True, self.turn)
+            print(n)
+#
+    def play_against_best_move(self, depth=3):
+        global n
+        n = 0
+        value, best_move = self.get_best_move_alpha(depth, minint, maxint, True, self.turn)
+        print(n)
+        print(value, best_move)
+        inp = ''
+        while best_move != None and inp != 'exit':
+            self.move(best_move)
+            print(value, best_move)
+            self.print_board(1)
+            inp = raw_input()
+            if inp == 'exit':
+                break
+            move = [tuple(map(int, x.split(','))) for x in inp.split(' ')]
+            self.move(move)
+            print(move)
+            self.print_board(1)
+            n = 0
+            value, best_move = self.get_best_move_alpha(depth, minint, maxint, True, self.turn)
             print(n)
 #
     def get_best_move(self, depth, maxing_player):
@@ -208,18 +254,20 @@ class Game:
                 self.unmove()
             return (value, best_move)
 #
-    def get_best_move_alpha(self, depth, alpha, beta, maxing_player):
+    def get_best_move_alpha(self, depth, alpha, beta, maxing_player, valued_player):
         global n
         n += 1
+        if self.winner is not None:
+            return (maxint if self.winner is valued_player else minint, None)
         moves = self.get_moves()
         if depth == 0 or len(moves) == 0:
-            return ((-1) * self.get_board_value(), None)
+            return (self.get_board_value(valued_player), None)
         if maxing_player:
             value = minint
             best_move = None
             for move in moves:
                 self.move(move)
-                new_val, _ = self.get_best_move_alpha(depth - 1, alpha, beta, False)
+                new_val, _ = self.get_best_move_alpha(depth - 1, alpha, beta, False, valued_player)
                 # if (new_val == value and randint(0, 1)) or new_val > value:
                 if new_val > value:
                     value = new_val
@@ -234,7 +282,7 @@ class Game:
             best_move = None
             for move in moves:
                 self.move(move)
-                new_val, _ = self.get_best_move_alpha(depth - 1, alpha, beta, True)
+                new_val, _ = self.get_best_move_alpha(depth - 1, alpha, beta, True, valued_player)
                 # if (new_val == value and randint(0, 1)) or new_val < value:
                 if new_val < value:
                     value = new_val
@@ -247,7 +295,7 @@ class Game:
 #
     def get_board_value(self, color=None):
         if color is None:
-            color = self.turn
+            color = WHITE
         return sum([self.piece_value(piece) for piece in self.pieces[color]]) \
              - sum([self.piece_value(piece) for piece in self.pieces[self.other_color(color)]])
 #
@@ -256,6 +304,38 @@ class Game:
         if hasattr(piece, "get_modifier"):
             modifier = piece.get_modifier(self.board)
         return self.piece_values[type(piece)] + modifier
+#
+    def set_from_fen(self, fen_str):
+        def get_color(ch):
+            return int(ch.islower())
+        def get_piece(x, y, ch):
+            color = get_color(ch)
+            return {
+                'k': King,
+                'q': Queen,
+                'r': Rook,
+                'b': Bishop,
+                'n': Knight,
+                'p': Pawn
+            }[ch.lower()](x, y, color)  # return initialized piece object
+        fen_lines = fen_str.split('/')
+        new_pieces = [[], []]
+        new_board = [[None for x in range(8)] for y in range(8)]
+        for x in range(8):
+            y = -1
+            for ch in fen_lines[x]:
+                if ch.isdigit():
+                    y += int(ch)
+                else:
+                    y += 1
+                    piece = get_piece(x, y, ch)
+                    new_pieces[get_color(ch)].append(piece)
+                    new_board[x][y] = piece
+        self.board = new_board
+        self.pieces = new_pieces
+        self.ply = 1
+        self.turn = 0
+        self.moves = []
 #
     @staticmethod
     def other_color(color):
@@ -377,8 +457,8 @@ class Pawn(Piece):
                 i += 1
         return move_list
 #
-    # def get_modifier(self, board):
-    #     modifier = 0
+    def get_modifier(self, board):
+        modifier = 0
     #     for x in range(self.start_zone, self.end_zone, self.gravity):
     #         piece = board[x][self.y]
     #         if x != self.x and type(piece) is Pawn and piece.get_color() == self.color:
@@ -393,8 +473,8 @@ class Pawn(Piece):
     #         if 0 <= x <= 7 and 0 <= y <= 7 \
     #         and type(board[x][y]) is Pawn and board[x][y].get_color() == self.color:
     #             modifier += val
-    #     modifier += 0.5 * (self.x - self.start_zone + 1) ** 2 - 2.5 * (self.x - self.start_zone + 1) + 2
-    #     return modifier
+        modifier += (self.gravity * (self.x - self.start_zone) / 4) ** 5
+        return modifier
 #
     def get_char(self):
         return 'P' if self.color is WHITE else 'p'
@@ -416,6 +496,13 @@ class King(Piece):
                     and board[x][y].get_color() is not self.color)): # \
             # and not self.would_be_in_check(x, y, board):
                 move_list.append(((self.x, self.y), (x, y)))
+        # if not self.has_moved:
+        #     if type(board[self.x][7]) is Rook and not board[self.x][7].has_moved \
+        #     and all([board[self.x][y] == None for y in range(self.y + 1, 7)]):
+        #         move_list.append(((self.x, self.y), (self.x, 6), board[self.x][7]))
+        #     if type(board[self.x][0]) is Rook and not board[self.x][0].has_moved \
+        #     and all([board[self.x][y] == None for y in range(self.y - 1, 0, -1)]):\
+        #         move_list.append(((self.x, self.y), (self.x, 2), board[self.x][0]))
         return move_list
 #
     def in_check(self, board):
@@ -526,5 +613,6 @@ class Knight(Piece):
 if __name__ == "__main__":
     g = Game()
     g.print_board(1)
-    g.make_best_move(depth=3)
+    g.play_against_best_move(depth=3)
+    # g.make_best_move(depth=3)
 
